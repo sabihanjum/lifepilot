@@ -828,27 +828,6 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* INPUT */}
-                <div className="flex max-w-xl items-center gap-2 rounded-2xl border border-white/[0.08] bg-[#080b11] p-2 focus-within:border-indigo-500/40">
-                  <input
-                    value={message}
-                    onChange={(e) => setMessage(e.target.value)}
-                    onKeyDown={(e) => e.key === "Enter" && sendMessage()}
-                    placeholder="Type or tap the microphone and speak..."
-                    aria-label="Message LifePilot"
-                    className="min-w-0 flex-1 bg-transparent px-3 py-2 text-sm outline-none placeholder:text-slate-600"
-                  />
-                  <button
-                    onClick={() => sendMessage()}
-                    disabled={isSending || !message.trim()}
-                    aria-label="Send message"
-                    title="Send message"
-                    className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-indigo-500 text-white transition hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    <Send size={17} />
-                  </button>
-                </div>
-
                 <p className="mt-3 text-[11px] text-slate-600">
                   AI actions will always require your approval when necessary.
                 </p>
@@ -1113,6 +1092,43 @@ export default function App() {
                 </button>
               </div>
             )}
+
+            <div className="mt-5 flex items-center gap-2 rounded-2xl border border-indigo-500/20 bg-[#080b11] p-2 shadow-[0_0_30px_rgba(99,102,241,0.06)] focus-within:border-indigo-500/50">
+              <button
+                onClick={toggleMic}
+                disabled={isSending}
+                aria-label={isListening ? "Stop voice conversation" : "Start voice conversation"}
+                title={isListening ? "Stop voice conversation" : "Speak to LifePilot"}
+                className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl transition ${
+                  isListening
+                    ? "bg-rose-500 text-white shadow-[0_0_25px_rgba(244,63,94,0.25)]"
+                    : "bg-indigo-500/15 text-indigo-300 hover:bg-indigo-500/25"
+                }`}
+              >
+                {isListening ? <MicOff size={18} /> : <Mic size={18} />}
+              </button>
+              <input
+                value={message}
+                onChange={(event) => setMessage(event.target.value)}
+                onKeyDown={(event) => event.key === "Enter" && sendMessage()}
+                placeholder={
+                  isListening
+                    ? "Listening — speak naturally..."
+                    : "Type a message or tap the microphone..."
+                }
+                aria-label="Message LifePilot"
+                className="min-w-0 flex-1 bg-transparent px-2 py-2 text-sm outline-none placeholder:text-slate-600"
+              />
+              <button
+                onClick={() => sendMessage()}
+                disabled={isSending || !message.trim()}
+                aria-label="Send message"
+                title="Send message"
+                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-indigo-500 text-white transition hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <Send size={17} />
+              </button>
+            </div>
 
           </section>
 
