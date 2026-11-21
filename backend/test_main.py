@@ -200,6 +200,15 @@ class LifePilotAgentTests(unittest.TestCase):
         self.assertLessEqual(estimate["total"], trip["budget"])
         self.assertEqual(estimate["remaining"], trip["budget"] - estimate["total"])
 
+    def test_agora_generated_uids_are_unique_and_not_fixed_defaults(self):
+        first_agent, first_remote = main.generate_agora_uids()
+        second_agent, second_remote = main.generate_agora_uids()
+        self.assertNotEqual(first_agent, second_agent)
+        self.assertNotEqual(first_remote, second_remote)
+        self.assertNotEqual(first_agent, first_remote)
+        self.assertNotEqual(first_agent, 1001)
+        self.assertNotEqual(first_remote, 1002)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -209,7 +209,7 @@ class AgoraTokenRequest(BaseModel):
 class AgoraAgentStartRequest(BaseModel):
     conversation_id: str | None = None
     channel_name: str = "lifepilot-demo"
-    remote_uid: int = 1002
+    remote_uid: int | None = None
 
 
 class AgoraAgentStopRequest(BaseModel):
@@ -406,6 +406,14 @@ def task(title: str, status: str) -> dict[str, str]:
     return {"title": title, "status": status}
 
 
+def generate_agora_uids() -> tuple[int, int]:
+    agent_uid = int.from_bytes(os.urandom(3), "big") % 500_000 + 1_000_000
+    remote_uid = int.from_bytes(os.urandom(3), "big") % 500_000 + 2_000_000
+    while remote_uid == agent_uid:
+        remote_uid = int.from_bytes(os.urandom(3), "big") % 500_000 + 2_000_000
+    return agent_uid, remote_uid
+
+
 def get_agora_rest_auth(agent_token: str) -> str:
     customer_key = os.getenv("AGORA_CUSTOMER_KEY")
     customer_secret = os.getenv("AGORA_CUSTOMER_SECRET")
@@ -485,8 +493,11 @@ async def start_agora_agent(request: AgoraAgentStartRequest):
     except ImportError as exc:
         raise HTTPException(status_code=500, detail="Agora token builder package is missing") from exc
 
-    agent_uid = 1001
-    remote_uid = request.remote_uid
+    generated_agent_uid, generated_remote_uid = generate_agora_uids()
+    agent_uid = generated_agent_uid
+    remote_uid = request.remote_uid or generated_remote_uid
+    if remote_uid == agent_uid:
+        remote_uid = generated_remote_uid
     expires_at = datetime.now(timezone.utc) + timedelta(hours=24)
     timestamp = int(expires_at.timestamp())
     agent_token = RtcTokenBuilder.buildTokenWithUid(
@@ -645,7 +656,7 @@ async def stop_agora_agent(request: AgoraAgentStopRequest):
 
     session = agora_sessions.get(request.agent_id)
     channel_name = session["channel_name"] if session else os.getenv("AGORA_CHANNEL_NAME", "lifepilot-demo")
-    agent_uid = session["agent_uid"] if session else 1001
+    agent_uid = session["agent_uid"] if session else int.from_bytes(os.urandom(3), "big") % 500_000 + 1_000_000
     expires_at = datetime.now(timezone.utc) + timedelta(hours=24)
     agent_token = RtcTokenBuilder.buildTokenWithUid(
         app_id,

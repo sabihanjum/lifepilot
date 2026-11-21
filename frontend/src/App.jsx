@@ -244,13 +244,17 @@ export default function App() {
 
   const startAgoraVoice = async () => {
     try {
+      if (agoraClientRef.current) {
+        await stopAgoraVoice();
+      }
+      const remoteUid = 2_000_000 + crypto.getRandomValues(new Uint32Array(1))[0] % 500_000;
       const response = await fetch(`${apiUrl}/api/agora/agent/start`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           conversation_id: conversationId,
           channel_name: "lifepilot-demo",
-          remote_uid: 1002,
+          remote_uid: remoteUid,
         }),
       });
       if (!response.ok) {
@@ -259,6 +263,7 @@ export default function App() {
       }
 
       const session = await response.json();
+      agoraAgentIdRef.current = session.agent_id;
       const client = AgoraRTC.createClient({ mode: "rtc", codec: "vp8" });
       agoraClientRef.current = client;
       client.on("user-published", async (user, mediaType) => {
