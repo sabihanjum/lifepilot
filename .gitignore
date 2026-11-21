@@ -1,0 +1,6 @@
+.env
+frontend/dist/
+frontend/node_modules/
+backend/venv/
+backend/lifepilot.db
+__pycache__/
