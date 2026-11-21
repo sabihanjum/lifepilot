@@ -209,9 +209,24 @@ export default function App() {
     recognition.continuous = false;
     recognition.interimResults = false;
     recognition.lang = "en-IN";
-    recognition.onstart = () => setIsListening(true);
-    recognition.onend = () => setIsListening(false);
-    recognition.onerror = () => setIsListening(false);
+    recognition.onstart = () => {
+      setIsListening(true);
+      setVoiceStatus("Listening — speak now");
+    };
+    recognition.onend = () => {
+      setIsListening(false);
+      setVoiceStatus("Tap to start a voice conversation");
+    };
+    recognition.onerror = (event) => {
+      setIsListening(false);
+      setVoiceStatus(
+        event.error === "not-allowed"
+          ? "Microphone permission was denied"
+          : event.error === "no-speech"
+            ? "No speech detected — try again"
+            : "Voice recognition was unavailable — try typing",
+      );
+    };
     recognition.onresult = (event) => {
       const transcript = event.results[0][0].transcript;
       setMessage(transcript);
@@ -368,29 +383,32 @@ export default function App() {
   }, []);
 
   const toggleMic = () => {
-    if (providerConfig?.agora === "configured") {
-      if (isListening) {
-        stopAgoraVoice();
-      } else {
-        startAgoraVoice();
-      }
-      return;
-    }
-
     if (!recognitionRef.current) {
-      setConversation((prev) => [
-        ...prev,
-        {
-          role: "assistant",
-          text: "Browser voice recognition is not supported here. You can continue by typing.",
-        },
-      ]);
+      if (providerConfig?.agora === "configured") {
+        if (isListening) {
+          stopAgoraVoice();
+        } else {
+          startAgoraVoice();
+        }
+      } else {
+        setConversation((prev) => [
+          ...prev,
+          {
+            role: "assistant",
+            text: "Voice recognition is not supported in this browser. Please use Chrome or Edge, or continue by typing.",
+          },
+        ]);
+      }
       return;
     }
     if (isListening) {
       recognitionRef.current.stop();
     } else {
-      recognitionRef.current.start();
+      try {
+        recognitionRef.current.start();
+      } catch {
+        setVoiceStatus("Voice recognition is already starting");
+      }
     }
   };
 
