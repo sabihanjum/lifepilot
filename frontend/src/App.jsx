@@ -46,6 +46,7 @@ export default function App() {
   const [conversationId, setConversationId] = useState(null);
   const [approvalRequired, setApprovalRequired] = useState(false);
   const [providerConfig, setProviderConfig] = useState(null);
+  const [voiceStatus, setVoiceStatus] = useState("Tap to start a voice conversation");
   const [savedTrips, setSavedTrips] = useState([]);
   const [calendarEvents, setCalendarEvents] = useState([]);
   const [preferences, setPreferences] = useState({
@@ -247,6 +248,23 @@ export default function App() {
       if (agoraClientRef.current) {
         await stopAgoraVoice();
       }
+      if (!window.isSecureContext) {
+        throw new Error("Microphone access requires HTTPS or localhost.");
+      }
+      if (!navigator.mediaDevices?.getUserMedia) {
+        throw new Error("This browser does not support microphone capture.");
+      }
+      setVoiceStatus("Requesting microphone permission...");
+      const permissionStream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      });
+      permissionStream.getTracks().forEach((track) => track.stop());
+
+      setVoiceStatus("Joining the LifePilot voice channel...");
       const remoteUid = 2_000_000 + crypto.getRandomValues(new Uint32Array(1))[0] % 500_000;
       const randomSuffix = Array.from(crypto.getRandomValues(new Uint32Array(4)))
         .map((value) => value.toString(16))
@@ -285,11 +303,13 @@ export default function App() {
         session.remote_token,
         session.remote_uid,
       );
+      setVoiceStatus("Publishing microphone audio...");
       const microphoneTrack = await AgoraRTC.createMicrophoneAudioTrack({
         encoderConfig: "music_standard",
       });
       microphoneTrackRef.current = microphoneTrack;
       await client.publish([microphoneTrack]);
+      setVoiceStatus("Voice connected — speak now");
       agoraAgentIdRef.current = session.agent_id;
       setIsListening(true);
     } catch (error) {
@@ -326,6 +346,7 @@ export default function App() {
       }).catch(() => {});
       agoraAgentIdRef.current = null;
     }
+    setVoiceStatus("Tap to start a voice conversation");
     setIsListening(false);
   };
 
@@ -791,8 +812,10 @@ export default function App() {
                     </p>
                     <p className="mt-1 text-xs text-slate-500">
                       {isListening
-                        ? "Tap to stop listening"
-                        : "Tap to use browser voice or type below"}
+                        ? voiceStatus
+                        : providerConfig?.agora === "configured"
+                          ? "Tap to join the Agora voice channel"
+                          : "Tap to use browser voice or type below"}
                     </p>
                   </div>
                 </div>
