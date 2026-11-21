@@ -248,12 +248,18 @@ export default function App() {
         await stopAgoraVoice();
       }
       const remoteUid = 2_000_000 + crypto.getRandomValues(new Uint32Array(1))[0] % 500_000;
+      const randomSuffix = Array.from(crypto.getRandomValues(new Uint32Array(4)))
+        .map((value) => value.toString(16))
+        .join("");
+      const channelName = `lifepilot-${conversationId || randomSuffix}`
+        .replace(/[^a-zA-Z0-9_-]/g, "")
+        .slice(0, 64);
       const response = await fetch(`${apiUrl}/api/agora/agent/start`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           conversation_id: conversationId,
-          channel_name: "lifepilot-demo",
+          channel_name: channelName,
           remote_uid: remoteUid,
         }),
       });

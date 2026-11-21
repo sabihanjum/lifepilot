@@ -209,6 +209,13 @@ class LifePilotAgentTests(unittest.TestCase):
         self.assertNotEqual(first_agent, 1001)
         self.assertNotEqual(first_remote, 1002)
 
+    def test_agora_start_defaults_to_a_unique_channel(self):
+        first = main.generate_agora_channel_name()
+        second = main.generate_agora_channel_name()
+        self.assertNotEqual(first, "lifepilot-demo")
+        self.assertNotEqual(first, second)
+        self.assertTrue(first.startswith("lifepilot-"))
+
 
 if __name__ == "__main__":
     unittest.main()

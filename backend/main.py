@@ -208,7 +208,7 @@ class AgoraTokenRequest(BaseModel):
 
 class AgoraAgentStartRequest(BaseModel):
     conversation_id: str | None = None
-    channel_name: str = "lifepilot-demo"
+    channel_name: str | None = None
     remote_uid: int | None = None
 
 
@@ -414,6 +414,10 @@ def generate_agora_uids() -> tuple[int, int]:
     return agent_uid, remote_uid
 
 
+def generate_agora_channel_name() -> str:
+    return f"lifepilot-{uuid.uuid4().hex[:16]}"
+
+
 def get_agora_rest_auth(agent_token: str) -> str:
     customer_key = os.getenv("AGORA_CUSTOMER_KEY")
     customer_secret = os.getenv("AGORA_CUSTOMER_SECRET")
@@ -493,6 +497,14 @@ async def start_agora_agent(request: AgoraAgentStartRequest):
     except ImportError as exc:
         raise HTTPException(status_code=500, detail="Agora token builder package is missing") from exc
 
+    channel_name = (
+        request.channel_name.strip()
+        if request.channel_name and request.channel_name.strip()
+        else generate_agora_channel_name()
+    )
+    if len(channel_name) > 64:
+        channel_name = channel_name[:64]
+
     generated_agent_uid, generated_remote_uid = generate_agora_uids()
     agent_uid = generated_agent_uid
     remote_uid = request.remote_uid or generated_remote_uid
@@ -503,7 +515,7 @@ async def start_agora_agent(request: AgoraAgentStartRequest):
     agent_token = RtcTokenBuilder.buildTokenWithUid(
         app_id,
         app_certificate,
-        request.channel_name,
+        channel_name,
         agent_uid,
         1,
         timestamp,
@@ -511,7 +523,7 @@ async def start_agora_agent(request: AgoraAgentStartRequest):
     remote_token = RtcTokenBuilder.buildTokenWithUid(
         app_id,
         app_certificate,
-        request.channel_name,
+        channel_name,
         remote_uid,
         1,
         timestamp,
@@ -585,7 +597,7 @@ async def start_agora_agent(request: AgoraAgentStartRequest):
     payload = {
         "name": agent_name,
         "properties": {
-            "channel": request.channel_name,
+            "channel": channel_name,
             "token": agent_token,
             "agent_rtc_uid": str(agent_uid),
             "remote_rtc_uids": [str(remote_uid)],
@@ -626,14 +638,14 @@ async def start_agora_agent(request: AgoraAgentStartRequest):
     agora_sessions[agent_id] = {
         "agent_id": agent_id,
         "conversation_id": request.conversation_id,
-        "channel_name": request.channel_name,
+        "channel_name": channel_name,
         "remote_uid": remote_uid,
         "agent_uid": agent_uid,
     }
     return {
         "agent_id": agent_id,
         "app_id": app_id,
-        "channel_name": request.channel_name,
+        "channel_name": channel_name,
         "remote_uid": remote_uid,
         "remote_token": remote_token,
         "expires_at": expires_at.isoformat(),
