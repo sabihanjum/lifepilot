@@ -58,6 +58,7 @@ export default function App() {
     },
   });
   const [preferenceSaved, setPreferenceSaved] = useState(false);
+  const chatEndRef = useRef(null);
   const [tripOverview, setTripOverview] = useState({
     destination: "No trip planned",
     budget: null,
@@ -218,6 +219,13 @@ export default function App() {
     };
     recognitionRef.current = recognition;
   }, [sendMessage]);
+
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({
+      behavior: "smooth",
+      block: "nearest",
+    });
+  }, [conversation, isSending]);
 
   const handleApproval = async (approved) => {
     if (!conversationId) return;
@@ -826,12 +834,16 @@ export default function App() {
                     value={message}
                     onChange={(e) => setMessage(e.target.value)}
                     onKeyDown={(e) => e.key === "Enter" && sendMessage()}
-                    placeholder="Tell me what you want to accomplish..."
+                    placeholder="Type or tap the microphone and speak..."
+                    aria-label="Message LifePilot"
                     className="min-w-0 flex-1 bg-transparent px-3 py-2 text-sm outline-none placeholder:text-slate-600"
                   />
                   <button
                     onClick={() => sendMessage()}
-                    className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-indigo-500 text-white transition hover:bg-indigo-400"
+                    disabled={isSending || !message.trim()}
+                    aria-label="Send message"
+                    title="Send message"
+                    className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-indigo-500 text-white transition hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     <Send size={17} />
                   </button>
@@ -1067,6 +1079,17 @@ export default function App() {
                   </div>
                 </div>
               ))}
+              {isSending && (
+                <div className="flex items-center gap-3">
+                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-indigo-500/15 text-indigo-300">
+                    <Sparkles size={15} />
+                  </div>
+                  <div className="rounded-2xl rounded-tl-sm border border-white/[0.04] bg-[#171c28] px-4 py-3">
+                    <p className="text-xs text-slate-400">LifePilot is responding…</p>
+                  </div>
+                </div>
+              )}
+              <div ref={chatEndRef} />
             </div>
 
             {approvalRequired && (
@@ -1091,21 +1114,6 @@ export default function App() {
               </div>
             )}
 
-            <div className="mt-5 flex items-center gap-2 rounded-xl border border-white/[0.07] bg-[#080b11] p-2">
-              <input
-                value={message}
-                onChange={(e) => setMessage(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && sendMessage()}
-                placeholder="Continue your conversation..."
-                className="flex-1 bg-transparent px-3 py-2 text-sm outline-none placeholder:text-slate-600"
-              />
-              <button
-                onClick={() => sendMessage()}
-                className="flex h-9 w-9 items-center justify-center rounded-lg bg-indigo-500 text-white hover:bg-indigo-400"
-              >
-                <Send size={16} />
-              </button>
-            </div>
           </section>
 
           </>
