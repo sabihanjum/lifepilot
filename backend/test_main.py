@@ -115,6 +115,91 @@ class LifePilotAgentTests(unittest.TestCase):
         self.assertNotIn("Express train", result["reply"])
         self.assertNotIn("₹2,200", result["reply"])
 
+    def test_rainy_coorg_revision_preserves_context_and_updates_without_duplicate(self):
+        initial = self.chat(
+            "Plan a 2-day trip to Coorg for 2 people under ₹10000. "
+            "Save it to My Trips. Don't book anything.",
+            conversation_id="coorg-context",
+            user_id="rain-user",
+        )
+        trip_id = initial["workflow"]["itinerary"]["trip_id"]
+        revised = self.chat(
+            "It is raining in Coorg. Replace outdoor activities with indoor or covered "
+            "alternatives and revise the itinerary while keeping the ₹10000 budget.",
+            conversation_id="coorg-context",
+            user_id="rain-user",
+        )
+        trip = revised["workflow"]["itinerary"]
+        self.assertEqual(trip["trip_id"], trip_id)
+        self.assertEqual(trip["destination"], "Coorg")
+        self.assertEqual(trip["people"], 2)
+        self.assertEqual(trip["days"], 2)
+        self.assertEqual(trip["budget"], 10000)
+        self.assertIn("indoor", " ".join(trip["day_1"]).lower())
+        self.assertNotIn("Abbey Falls", " ".join(trip["day_1"] + trip["day_2"]))
+        self.assertLessEqual(trip["estimate"]["total"], trip["budget"])
+        self.assertEqual(trip["estimate"]["remaining"], trip["budget"] - trip["estimate"]["total"])
+        rows = main.get_latest_trip("coorg-context", "Coorg")
+        self.assertEqual(rows["trip_id"], trip_id)
+
+    def test_packing_reminder_is_new_30_minute_event_and_preserves_existing_events(self):
+        first = self.chat(
+            "Schedule 2 hours of AI learning tomorrow morning and "
+            "1 hour for job applications in the afternoon.",
+            conversation_id="calendar-context",
+        )
+        existing = first["workflow"]["calendar_events"]
+        second = self.chat(
+            "Schedule a 30-minute packing reminder tomorrow evening.",
+            conversation_id="calendar-context",
+        )
+        events = second["workflow"]["calendar_events"]
+        self.assertEqual(len(events), 1)
+        event = events[0]
+        self.assertEqual(event["title"], "Packing reminder")
+        start = main.datetime.fromisoformat(event["start"])
+        end = main.datetime.fromisoformat(event["end"])
+        self.assertEqual((end - start).total_seconds(), 1800)
+        self.assertEqual(start.hour, 18)
+        listed = main.list_calendar_events()
+        titles = {item["title"] for item in listed}
+        self.assertIn("Packing reminder", titles)
+        self.assertIn("AI learning", titles)
+        self.assertIn("Job applications", titles)
+        self.assertGreaterEqual(len(existing), 2)
+
+    def test_multiple_calendar_requests_use_independent_results(self):
+        one = self.chat("Schedule packing tomorrow evening", conversation_id="multi-calendar")
+        two = self.chat("Schedule 30 minutes of resume review tomorrow morning", conversation_id="multi-calendar")
+        self.assertEqual(one["workflow"]["calendar_events"][0]["title"], "Packing reminder")
+        self.assertEqual(two["workflow"]["calendar_events"][0]["title"], "Calendar reminder")
+
+    def test_calendar_creation_failure_is_not_reported_as_success(self):
+        original = main.save_calendar_event
+        main.save_calendar_event = lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("calendar unavailable"))
+        try:
+            result = self.chat("Schedule a 30-minute packing reminder tomorrow evening")
+        finally:
+            main.save_calendar_event = original
+        self.assertIn("calendar event creation failed", result["reply"].lower())
+        self.assertEqual(result["workflow"]["status"], "failed")
+        self.assertNotIn("Created", result["reply"])
+
+    def test_trip_budget_is_mathematically_correct_and_within_limit(self):
+        result = self.chat("Plan a 2-day trip to Coorg for 2 people under ₹8000.")
+        trip = result["workflow"]["itinerary"]
+        estimate = trip["estimate"]
+        category_keys = [
+            "transportation_amount",
+            "stay_amount",
+            "food_amount",
+            "activities_amount",
+        ]
+        calculated = sum(estimate[key] for key in category_keys)
+        self.assertEqual(estimate["total"], calculated)
+        self.assertLessEqual(estimate["total"], trip["budget"])
+        self.assertEqual(estimate["remaining"], trip["budget"] - estimate["total"])
+
 
 if __name__ == "__main__":
     unittest.main()

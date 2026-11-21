@@ -2,6 +2,7 @@ import os
 import re
 import json
 import sqlite3
+import copy
 import uuid
 import base64
 from urllib.parse import urlencode
@@ -106,6 +107,55 @@ def save_trip(trip: dict[str, Any]) -> str:
     finally:
         connection.close()
     return trip_id
+
+
+def update_trip(trip_id: str, trip: dict[str, Any]) -> None:
+    connection = sqlite3.connect(DB_PATH)
+    try:
+        connection.execute(
+            "UPDATE trips SET destination = ?, data = ? WHERE id = ?",
+            (trip["destination"], json.dumps(trip, ensure_ascii=False), trip_id),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+
+def get_trip(trip_id: str) -> dict[str, Any] | None:
+    connection = sqlite3.connect(DB_PATH)
+    try:
+        row = connection.execute(
+            "SELECT data FROM trips WHERE id = ?", (trip_id,)
+        ).fetchone()
+    finally:
+        connection.close()
+    return json.loads(row[0]) if row else None
+
+
+def get_latest_trip(conversation_id: str, destination: str | None = None) -> dict[str, Any] | None:
+    connection = sqlite3.connect(DB_PATH)
+    try:
+        if destination:
+            row = connection.execute(
+                "SELECT data FROM trips WHERE conversation_id = ? AND destination = ? "
+                "ORDER BY created_at DESC LIMIT 1",
+                (conversation_id, destination),
+            ).fetchone()
+            if not row:
+                row = connection.execute(
+                    "SELECT data FROM trips WHERE destination = ? "
+                    "ORDER BY created_at DESC LIMIT 1",
+                    (destination,),
+                ).fetchone()
+        else:
+            row = connection.execute(
+                "SELECT data FROM trips WHERE conversation_id = ? "
+                "ORDER BY created_at DESC LIMIT 1",
+                (conversation_id,),
+            ).fetchone()
+    finally:
+        connection.close()
+    return json.loads(row[0]) if row else None
 
 
 def save_calendar_event(conversation_id: str, event: dict[str, Any]) -> None:
@@ -709,6 +759,11 @@ def classify_intent(message: str) -> str:
         return "confirmation"
     if re.search(r"\b(remember|prefer|preference|preferences|my taste)\b", lowered):
         return "memory"
+    if re.search(
+        r"\b(revise|replan|update|change|replace|it is raining|raining|rainy|weather revision)\b",
+        lowered,
+    ):
+        return "trip_revision"
     if re.search(r"\b(schedule|calendar|appointment|ai learning|job applications)\b", lowered):
         return "calendar"
     if re.search(r"\b(trip|travel|itinerary|accommodation|hotel|places to visit|coorg|destination)\b", lowered):
@@ -750,6 +805,15 @@ def build_trip_plan(conversation_id: str, parsed: dict[str, Any], preferences: d
     food = 900 * people * days
     activities = 900 if preferences.get("travel_preferences", {}).get("nature") else 1100
     total = transport + stay + food + activities
+    if total > budget:
+        transport = min(transport, max(int(budget * 0.35), 1500))
+        stay = min(stay, max(int(budget * 0.25), 800))
+        food = min(food, max(int(budget * 0.30), 600))
+        activities = min(activities, max(int(budget * 0.10), 300))
+        total = transport + stay + food + activities
+        if total > budget:
+            activities = max(0, activities - (total - budget))
+            total = transport + stay + food + activities
     remaining = budget - total
     itinerary = {
         "conversation_id": conversation_id,
@@ -758,10 +822,30 @@ def build_trip_plan(conversation_id: str, parsed: dict[str, Any], preferences: d
         "people": people,
         "budget": budget,
         "estimate": {
-            "transportation": transport,
-            "stay": stay,
-            "food": food,
-            "activities_and_fees": activities,
+            "transportation": {
+                "amount": transport,
+                "basis": f"Estimated round-trip transport total for {people} travellers",
+                "confirmed": False,
+            },
+            "stay": {
+                "amount": stay,
+                "basis": f"Estimated for {days - 1} night(s), double occupancy",
+                "confirmed": False,
+            },
+            "food": {
+                "amount": food,
+                "basis": f"Estimated ₹900 per person per day for {people} travellers over {days} days",
+                "confirmed": False,
+            },
+            "activities_and_fees": {
+                "amount": activities,
+                "basis": "Estimated indoor/covered activities and entry fees",
+                "confirmed": False,
+            },
+            "transportation_amount": transport,
+            "stay_amount": stay,
+            "food_amount": food,
+            "activities_amount": activities,
             "total": total,
             "remaining": remaining,
         },
@@ -780,6 +864,10 @@ def build_trip_plan(conversation_id: str, parsed: dict[str, Any], preferences: d
 
 def format_trip_reply(trip: dict[str, Any]) -> str:
     estimate = trip["estimate"]
+    transport = estimate.get("transportation_amount", estimate.get("transportation", {}).get("amount", 0))
+    stay = estimate.get("stay_amount", estimate.get("stay", {}).get("amount", 0))
+    food = estimate.get("food_amount", estimate.get("food", {}).get("amount", 0))
+    activities = estimate.get("activities_amount", estimate.get("activities_and_fees", {}).get("amount", 0))
     budget_note = (
         f"Remaining budget: ₹{estimate['remaining']:,}"
         if estimate["remaining"] >= 0
@@ -788,10 +876,10 @@ def format_trip_reply(trip: dict[str, Any]) -> str:
     reply = (
         f"I planned a {trip['days']}-day trip to {trip['destination']} for {trip['people']} people "
         f"within a ₹{trip['budget']:,} total budget.\n\n"
-        f"Transportation: ₹{estimate['transportation']:,}\n"
-        f"Stay: ₹{estimate['stay']:,}\n"
-        f"Food: ₹{estimate['food']:,}\n"
-        f"Activities and entry fees: ₹{estimate['activities_and_fees']:,}\n"
+        f"Transportation (total for {trip['people']} people): ₹{transport:,}\n"
+        f"Stay ({trip['days'] - 1} night(s), double occupancy): ₹{stay:,}\n"
+        f"Food (₹900 per person per day): ₹{food:,}\n"
+        f"Activities and entry fees (estimated): ₹{activities:,}\n"
         f"Estimated total: ₹{estimate['total']:,}\n"
         f"{budget_note}\n\n"
         "Day 1: " + " → ".join(trip["day_1"]) + "\n"
@@ -849,31 +937,217 @@ async def chat(request: ChatRequest):
     elif intent == "calendar":
         local_zone = timezone(timedelta(hours=5, minutes=30))
         now = datetime.now(local_zone)
-        tomorrow = (now + timedelta(days=1)).replace(hour=9, minute=0, second=0, microsecond=0)
-        morning_start = tomorrow
-        morning_end = tomorrow + timedelta(hours=2)
-        afternoon_start = tomorrow.replace(hour=14)
-        afternoon_end = afternoon_start + timedelta(hours=1)
-        events = [
-            {"id": f"EVT-{uuid.uuid4().hex[:8].upper()}", "title": "AI learning", "start": morning_start.isoformat(), "end": morning_end.isoformat()},
-            {"id": f"EVT-{uuid.uuid4().hex[:8].upper()}", "title": "Job applications", "start": afternoon_start.isoformat(), "end": afternoon_end.isoformat()},
-        ]
-        for event in events:
-            save_calendar_event(conversation_id, event)
-            calendar_events[conversation_id] = event
+        tomorrow = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        events = []
+        lowered = message.lower()
+
+        packing_match = re.search(r"\b(packing|pack)\b", lowered)
+        ai_match = re.search(r"\b(ai learning|learning)\b", lowered)
+        job_match = re.search(r"\b(job applications|job application|applications)\b", lowered)
+        morning_match = re.search(r"\bmorning\b", lowered)
+        afternoon_match = re.search(r"\bafternoon\b", lowered)
+        evening_match = re.search(r"\bevening\b", lowered)
+
+        if packing_match:
+            start_hour = 18
+            start = tomorrow.replace(hour=start_hour)
+            event = {
+                "id": f"EVT-{uuid.uuid4().hex[:8].upper()}",
+                "title": "Packing reminder",
+                "start": start.isoformat(),
+                "end": (start + timedelta(minutes=30)).isoformat(),
+                "status": "confirmed",
+                "provider": "LifePilot calendar",
+            }
+            try:
+                save_calendar_event(conversation_id, event)
+            except Exception as exc:
+                reply = f"Calendar event creation failed: {exc}"
+                workflow["pending_action"] = None
+                workflow["status"] = "failed"
+                workflow["tasks"] = [task("Create packing reminder", "failed")]
+                workflow["calendar_events"] = []
+                workflow["messages"].append({"role": "assistant", "text": reply})
+                return {
+                    "conversation_id": conversation_id,
+                    "reply": reply,
+                    "workflow": copy.deepcopy(workflow),
+                    "approval_required": False,
+                }
+            calendar_events.setdefault(conversation_id, {})
+            events.append(event)
+        else:
+            if ai_match:
+                start = tomorrow.replace(hour=9)
+                events.append({
+                    "id": f"EVT-{uuid.uuid4().hex[:8].upper()}",
+                    "title": "AI learning",
+                    "start": start.isoformat(),
+                    "end": (start + timedelta(hours=2)).isoformat(),
+                    "status": "confirmed",
+                    "provider": "LifePilot calendar",
+                })
+            if job_match:
+                start = tomorrow.replace(hour=14)
+                events.append({
+                    "id": f"EVT-{uuid.uuid4().hex[:8].upper()}",
+                    "title": "Job applications",
+                    "start": start.isoformat(),
+                    "end": (start + timedelta(hours=1)).isoformat(),
+                    "status": "confirmed",
+                    "provider": "LifePilot calendar",
+                })
+            if not events:
+                start = tomorrow.replace(hour=18 if evening_match else 9)
+                events.append({
+                    "id": f"EVT-{uuid.uuid4().hex[:8].upper()}",
+                    "title": "Calendar reminder",
+                    "start": start.isoformat(),
+                    "end": (start + timedelta(hours=1)).isoformat(),
+                    "status": "confirmed",
+                    "provider": "LifePilot calendar",
+                })
+            try:
+                for event in events:
+                    save_calendar_event(conversation_id, event)
+            except Exception as exc:
+                reply = f"Calendar event creation failed: {exc}"
+                workflow["pending_action"] = None
+                workflow["status"] = "failed"
+                workflow["tasks"] = [task("Create calendar event", "failed")]
+                workflow["calendar_events"] = []
+                workflow["messages"].append({"role": "assistant", "text": reply})
+                return {
+                    "conversation_id": conversation_id,
+                    "reply": reply,
+                    "workflow": copy.deepcopy(workflow),
+                    "approval_required": False,
+                }
+
         workflow["pending_action"] = None
         workflow["status"] = "completed"
-        workflow["tasks"] = [
-            task("Schedule AI learning", "completed"),
-            task("Schedule job applications", "completed"),
-        ]
+        workflow["tasks"] = [task(f"Schedule {event['title']}", "completed") for event in events]
         workflow["calendar_events"] = events
-        reply = (
-            "Created two calendar events for tomorrow:\n"
-            "• 9:00 AM–11:00 AM: AI learning\n"
-            "• 2:00 PM–3:00 PM: Job applications\n"
-            "Times use Asia/Kolkata unless a different timezone is supplied."
-        )
+        lines = ["Created the following calendar event(s) for tomorrow:"]
+        for event in events:
+            start = datetime.fromisoformat(event["start"])
+            end = datetime.fromisoformat(event["end"])
+            lines.append(
+                f"• {event['title']}: "
+                f"{start.strftime('%I:%M %p')}–{end.strftime('%I:%M %p')} "
+                f"(Asia/Kolkata)"
+            )
+        reply = "\n".join(lines)
+
+    elif intent == "trip_revision":
+        destination_match = re.search(r"\b(coorg|kodagu|mysuru|mysore|bengaluru|goa|mumbai|chennai)\b", message.lower())
+        destination = destination_match.group(1).title() if destination_match else None
+        if destination_match and destination.lower() in ("mysore",):
+            destination = "Mysuru"
+        if not destination:
+            if workflow.get("itinerary"):
+                destination = workflow["itinerary"].get("destination")
+            else:
+                destination = "Coorg"
+
+        existing = workflow.get("itinerary")
+        if existing and existing.get("destination", "").lower() != destination.lower():
+            existing = None
+        if not existing:
+            existing = get_latest_trip(conversation_id, destination)
+        if not existing:
+            reply = f"I couldn't find an existing {destination} trip to revise. Would you like me to create a new one?"
+            workflow["status"] = "needs_clarification"
+        else:
+            existing = dict(existing)
+            existing["destination"] = existing.get("destination") or destination
+            existing["people"] = int(existing.get("people") or 2)
+            existing["days"] = int(existing.get("days") or 2)
+            existing["budget"] = int(existing.get("budget") or 10000)
+            existing["preferences_applied"] = preferences or existing.get("preferences_applied", {})
+
+            rainy = bool(re.search(r"\b(rain|raining|rainy|bad weather|storm)\b", message.lower()))
+            if rainy:
+                existing["day_1"] = [
+                    "Check in and arrange luggage",
+                    "Visit covered coffee museum or estate indoor tasting",
+                    "Vegetarian dinner at a sheltered restaurant",
+                ]
+                existing["day_2"] = [
+                    "Visit indoor/local heritage museum",
+                    "Covered spice market or craft shopping",
+                    "Return journey",
+                ]
+                existing["weather_revision"] = {
+                    "reason": "Rainy weather",
+                    "changed": "Replaced outdoor nature and sightseeing activities with covered or indoor alternatives",
+                }
+
+            estimate = existing.get("estimate", {})
+            transport = estimate.get("transportation_amount", 3000)
+            stay = estimate.get("stay_amount", 2200 * max(existing["days"] - 1, 1))
+            food = estimate.get("food_amount", 900 * existing["people"] * existing["days"])
+            activities = estimate.get("activities_amount", 900)
+            total = transport + stay + food + activities
+            remaining = existing["budget"] - total
+            existing["estimate"] = {
+                "transportation": {
+                    "amount": transport,
+                    "basis": f"Estimated round-trip transport total for {existing['people']} travellers",
+                    "confirmed": False,
+                },
+                "stay": {
+                    "amount": stay,
+                    "basis": f"Estimated for {existing['days'] - 1} night(s), double occupancy",
+                    "confirmed": False,
+                },
+                "food": {
+                    "amount": food,
+                    "basis": f"Estimated ₹900 per person per day for {existing['people']} travellers over {existing['days']} days",
+                    "confirmed": False,
+                },
+                "activities_and_fees": {
+                    "amount": activities,
+                    "basis": "Estimated indoor/covered activities and entry fees",
+                    "confirmed": False,
+                },
+                "transportation_amount": transport,
+                "stay_amount": stay,
+                "food_amount": food,
+                "activities_amount": activities,
+                "total": total,
+                "remaining": remaining,
+            }
+
+            trip_id = existing.get("trip_id")
+            existing["conversation_id"] = conversation_id
+            existing["status"] = "saved"
+            if trip_id:
+                update_trip(trip_id, existing)
+            else:
+                trip_id = save_trip(existing)
+                existing["trip_id"] = trip_id
+                update_trip(trip_id, existing)
+
+            workflow["itinerary"] = existing
+            workflow["status"] = "saved"
+            workflow["tasks"] = [
+                task("Retrieve existing trip", "completed"),
+                task("Apply weather revision", "completed"),
+                task("Recalculate budget", "completed"),
+                task("Update My Trips", "completed"),
+            ]
+            reply = (
+                f"Updated trip {trip_id} for {existing['destination']}.\n"
+                f"Preserved: {existing['days']} days, {existing['people']} people, "
+                f"₹{existing['budget']:,} budget.\n"
+                "Changes: Replaced outdoor sightseeing with covered or indoor alternatives "
+                "suitable for rain.\n"
+                f"Estimated total remains ₹{total:,}; remaining budget is ₹{remaining:,}.\n"
+                "Transportation is total for both travellers; stay is estimated for "
+                f"{existing['days'] - 1} night(s) in double occupancy; food is estimated at "
+                "₹900 per person per day."
+            )
 
     elif intent == "trip":
         parsed = parse_trip_request(message)
@@ -930,7 +1204,7 @@ async def chat(request: ChatRequest):
     return {
         "conversation_id": conversation_id,
         "reply": reply,
-        "workflow": workflow,
+        "workflow": copy.deepcopy(workflow),
         "approval_required": False,
     }
 
